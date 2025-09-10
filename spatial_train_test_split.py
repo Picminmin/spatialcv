@@ -28,30 +28,30 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.utils import resample
+from dataclasses import dataclass
 from matplotlib.colors import ListedColormap, to_rgba
 
 __version__ = "0.0.5"
 
 
-def spatial_train_test_split_v4(
-    X,
-    y,
-    n_rows,
-    n_cols,
-    test_size = 0.3,
-    min_train_samples_per_class = 1,
-    min_test_samples_per_class = 5,
-    background_label = 0,
-    random_state = None,
-    auto_adjust_test_size = False,
-    min_search_test_ratio = None,
-    max_search_test_ratio = None,
-    step = 0.05,
-    max_iter = 100
-):
+@dataclass
+class SpatialSplitConfig:
+    n_rows: int = 13                       # ブロック分割数(縦)
+    n_cols: int = 13                       # ブロック分割数(横)
+    min_train_samples_per_class: int = 20  # 各土地被覆クラスで作成する教師データのサンプル数の下限
+    min_test_samples_per_class: int = 5    # 各土地被覆クラスで作成するなテストサンプル数の下限
+    background_label: int = 0              # 各土地被覆クラスで作成するなテストサンプル数の下限
+    random_state: int = None               # 乱数シード
+    auto_adjust_test_size: bool = False    # テストサイズを自動調整するか
+    min_search_test_ratio: float = None    # 自動探索モード時の下限
+    max_search_test_ratio: float = None    # 自動探索モード時の上限
+    step: float = 0.05                     # 自動探索モード時の刻み幅
+    max_iter: int = 100                    # ランダム試行回数
+
+def spatial_train_test_split(X, y, test_size = 0.7, cfg: SpatialSplitConfig = SpatialSplitConfig()):
     """
-    空間ブロック分割によるtrain/test分割(v4)
-    spatial_train_test_split_v4は以下の①、②を満たす。
+    空間ブロック分割によるtrain/test分割
+    spatial_train_test_splitは以下の①、②を満たす。
     「各土地被覆クラスで最低限の教師データのサンプル数を保証する。」・・・①
     「各土地被覆クラスで最低限のテストサンプル数を保証する。」・・・②
     ②より、CA(Class Accuracy)が0となる土地被覆クラスではCA自体は未定義ではなく、
@@ -64,31 +64,20 @@ def spatial_train_test_split_v4(
     Args:
         X (ndarray): 特徴量 (H, W, Bands)
         y (ndarray): ラベルマップ (H, W)
-        n_rows (int): ブロック分割数(縦)
-        n_cols (int): ブロック分割数(横)
         test_size (float, optional): 理想的なテストデータの割合(0.0~1.0)
-        min_train_samples_per_class (int, optional): 各土地被覆クラスで最低限必要な教師データのサンプル数
-        min_test_samples_per_class (int, optional): 各土地被覆クラスで最低限必要なテストサンプル数
-        background_label (int, optional): 背景クラスラベル
-        random_state (int): 乱数シード
-        auto_adjust_test_size (bool, optional): テストサイズを自動調整するか
-        min_search_test_ratio (float, optional): 自動探索モード時の下限
-        max_search_test_ratio (float, optional): 自動探索モード時の上限
-        step (float, optional): 自動探索モード時の刻み幅
-        max_iter (int, optional): ランダム試行回数
-
+        cfg (SpatialSplitConfig):    spatial_train_test_spalitのパラメータを簡潔に定義し、管理するためのdataclass
     Returns:
         X_train, X_test, y_train, y_test, train_mask, test_mask, best_test_size
     """
-    if random_state is not None:
-        np.random.seed(random_state)
+    if cfg.random_state is not None:
+        np.random.seed(cfg.random_state)
 
     H, W = y.shape
-    block_h = H // n_rows
-    block_w = W // n_cols
-    blocks = [(i, j) for i in range(n_rows) for j in range(n_cols)]
-    total_pixels = np.sum(y != background_label)
-    unique_classes = np.unique(y[y != background_label])
+    block_h = H // cfg.n_rows
+    block_w = W // cfg.n_cols
+    blocks = [(i, j) for i in range(cfg.n_rows) for j in range(cfg.n_cols)]
+    total_pixels = np.sum(y != cfg.background_label)
+    unique_classes = np.unique(y[y != cfg.background_label])
 
     def try_split(ts):
         """指定されたtest_sizeで1回分割を試行"""
@@ -111,8 +100,8 @@ def spatial_train_test_split_v4(
             test_mask[i * block_h:h_end, j * block_w:w_end] = True
 
         # 背景を除去
-        train_mask &= (y != background_label)
-        test_mask &= (y != background_label)
+        train_mask &= (y != cfg.background_label)
+        test_mask &= (y != cfg.background_label)
 
         # flatten
         X_flat = X.reshape(-1, X.shape[2])
@@ -128,19 +117,19 @@ def spatial_train_test_split_v4(
         for cls in unique_classes:
             cls_train_count = np.sum(y_train == cls)
             cls_test_count = np.sum(y_test == cls)
-            if cls_train_count < min_train_samples_per_class:
+            if cls_train_count < cfg.min_train_samples_per_class:
                 return None # 条件を満たさない → 再試行
-            if cls_test_count < min_test_samples_per_class:
+            if cls_test_count < cfg.min_test_samples_per_class:
                 return None # 条件を満たさない → 再試行
 
         return X_train, X_test, y_train, y_test, train_mask, test_mask
 
     # =========================================
-    # auto_adjust_test_size = Falseの場合(固定)
+    # cfg.auto_adjust_test_size = Falseの場合(固定)
     # =========================================
 
-    if not auto_adjust_test_size:
-        for _ in range(max_iter):
+    if not cfg.auto_adjust_test_size:
+        for _ in range(cfg.max_iter):
             result = try_split(test_size)
             if result is not None:
                 best_test_size = len(result[1]) / total_pixels
@@ -148,21 +137,21 @@ def spatial_train_test_split_v4(
 
         raise ValueError(
             f"条件を満たす分割が見つかりませんでした。"
-            f"test_size={test_size}, min_test_samples_per_class={min_test_samples_per_class}"
+            f"test_size={test_size}, cfg.min_test_samples_per_class={cfg.min_test_samples_per_class}"
         )
     # =========================================
-    # auto_adjust_test_size = Trueの場合(探索)
+    # cfg.auto_adjust_test_size = Trueの場合(探索)
     # =========================================
-    min_ratio = min_search_test_ratio or test_size
-    max_ratio = max_search_test_ratio or test_size
-    candidate_sizes = np.arange(min_ratio, max_ratio + 1e-8, step)
+    min_ratio = cfg.min_search_test_ratio or test_size
+    max_ratio = cfg.max_search_test_ratio or test_size
+    candidate_sizes = np.arange(min_ratio, max_ratio + 1e-8, cfg.step)
 
     best_result = None
     best_test_size = None
     best_diff = float("inf")
 
     for ts in candidate_sizes:
-        for _ in range(max_iter):
+        for _ in range(cfg.max_iter):
             result = try_split(ts)
             if result is None:
                 continue
@@ -202,7 +191,7 @@ def visualize_train_test_with_counts_csv(
         y (ndarray): ラベルマップ (H, W)
         train_mask (ndarray): 教師データのマスク (H, W)
         test_mask (ndarray): テストデータのマスク (H, W)
-        background_label (int): 背景クラスラベル
+        cfg.background_label (int): 背景クラスラベル
         csv_path (str): カラーマップ定義CSVのパス
         save_dir (str): 結果画像の保存先
         title (str): 図のタイトル
@@ -303,6 +292,7 @@ if __name__ == '__main__':
     from pprint import pprint
     import scipy.io
     from _Pixel import PixelDataset
+    from dataclasses import dataclass
     from _data_utils import get_default_pines
 
     """
@@ -323,8 +313,21 @@ if __name__ == '__main__':
 
     以上から、correctedは'pre-classified LULC data'に相当する可能性があると私は思う。
     """
+    @dataclass
+    class SpatialSplitConfig:
+        n_rows: int = 13                       # ブロック分割数(縦)
+        n_cols: int = 13                       # ブロック分割数(横)
+        min_train_samples_per_class: int = 20  # 各土地被覆クラスで作成する教師データのサンプル数の下限
+        min_test_samples_per_class: int = 5    # 各土地被覆クラスで作成するなテストサンプル数の下限
+        background_label: int = 0              # 各土地被覆クラスで作成するなテストサンプル数の下限
+        random_state: int = None               # 乱数シード
+        auto_adjust_test_size: bool = False    # テストサイズを自動調整するか
+        min_search_test_ratio: float = None    # 自動探索モード時の下限
+        max_search_test_ratio: float = None    # 自動探索モード時の上限
+        step: float = 0.05                     # 自動探索モード時の刻み幅
+        max_iter: int = 100                    # ランダム試行回数
 
-    def show_rs_info(features, gt=None, name='Dataset'):
+    def show_rs_info(features, gt=None, name='Dataset',cfg = SpatialSplitConfig()):
         """リモートセンシング画像に対する空間ブロック分割の動作確認に関する情報を表示する
 
         Args:
@@ -339,13 +342,13 @@ if __name__ == '__main__':
         # X_train, X_test, y_train, y_test, train_mask, test_mask = spatial_train_test_split(
             # X = features,
             # y = gt,
-            # n_rows = 2,
-            # n_cols = 3,
+            # cfg.n_rows = 2,
+            # cfg.n_cols = 3,
             # test_size = 0.7,
-            # background_label = 0,
+            # cfg.background_label = 0,
             # balance_classes= True,
             # target_per_class = 100,
-            # random_state = 2
+            # cfg.random_state = 2
         # )
 
         # (2)spatial_train_test_split_v2での動作確認
@@ -353,16 +356,16 @@ if __name__ == '__main__':
         # X_train, X_test, y_train, y_test, train_mask, test_mask = spatial_train_test_split_v2(
             # X = features,
             # y = gt,
-            # n_rows = 13,
-            # n_cols = 13,
+            # cfg.n_rows = 13,
+            # cfg.n_cols = 13,
             # test_size = test_size,
-            # background_label = 0,
+            # cfg.background_label = 0,
             # min_acceptable_test_ratio = test_size - 0.5,
             # max_acceptable_test_ratio = test_size + 0.5,
-            # random_state = 2,
+            # cfg.random_state = 2,
             # balance_classes = True,
             # target_per_class = 100,
-            # max_iter = 100
+            # cfg.max_iter = 100
         # )
 
         # (3)spatial_train_test_split_v3での動作確認
@@ -370,39 +373,30 @@ if __name__ == '__main__':
         # X_train, X_test, y_train, y_test, train_mask, test_mask, best_ts = spatial_train_test_split_v3(
             # X = features,
             # y = gt,
-            # n_rows = 13,
-            # n_cols = 13,
+            # cfg.n_rows = 13,
+            # cfg.n_cols = 13,
             # test_size = test_size,
-            # min_search_test_ratio = test_size - error_rate,
-            # max_search_test_ratio = test_size + error_rate,
-            # background_label = 0,
-            # random_state = None,
+            # cfg.min_search_test_ratio = test_size - error_rate,
+            # cfg.max_search_test_ratio = test_size + error_rate,
+            # cfg.background_label = 0,
+            # cfg.random_state = None,
             # balance_classes = False,
             # target_per_class = None,
-            # auto_adjust_test_size = True,
-            # step = 0.05,
-            # max_iter = 100
+            # cfg.auto_adjust_test_size = True,
+            # cfg.step = 0.05,
+            # cfg.max_iter = 100
         # )
 
         # (4)spatial_train_test_split_v4での動作確認
         test_size, error_rate = 0.7, 0.1
-        X_train, X_test, y_train, y_test, train_mask, test_mask, best_ts = spatial_train_test_split_v4(
+        X_train, X_test, y_train, y_test, train_mask, test_mask, best_ts = spatial_train_test_split(
             X = features,
             y = gt,
-            n_rows = 13,
-            n_cols = 13,
-            test_size = test_size,
-            min_search_test_ratio = test_size - error_rate,
-            max_search_test_ratio = test_size + error_rate,
-            background_label = 0,
-            min_test_samples_per_class = 10, # 各クラスで最低10サンプルのテストデータを保証
-            auto_adjust_test_size = True,
-            random_state = 42,
-            step = 0.05,
-            max_iter = 100
+            test_size=test_size,
+            cfg = cfg
         )
 
-        nobg_count = gt[gt != background_label].size
+        nobg_count = gt[gt != cfg.background_label].size
         split_name = 'spatial_train_test_split_v3'
         print(f"----- {split_name}での動作確認 -----")
         print(f'{name}データセット全体のサンプル数:{gt.flatten().size}')
@@ -451,7 +445,7 @@ if __name__ == '__main__':
         # y = y,
         # train_mask = train_mask,
         # test_mask = test_mask,
-        # background_label=0,
+        # cfg.background_label=0,
         # csv_path = r'C:\Users\sohta\Documents\大学院研究\MasterProgram_from20250724\RS_GroundTruth\03_Pavia Centre and University\pavia_class_colors.csv',
         # title = name
     # )
@@ -475,7 +469,7 @@ if __name__ == '__main__':
         # y = y,
         # train_mask = train_mask,
         # test_mask = test_mask,
-        # background_label=0,
+        # cfg.background_label=0,
         # csv_path = r'C:\Users\sohta\Documents\大学院研究\MasterProgram_from20250724\RS_GroundTruth\03_Pavia Centre and University\paviaU_class_colors.csv',
         # title = name
     # )
@@ -499,7 +493,7 @@ if __name__ == '__main__':
         # y = y,
         # train_mask = train_mask,
         # test_mask = test_mask,
-        # background_label=0,
+        # cfg.background_label=0,
         # csv_path = r'C:\Users\sohta\Documents\大学院研究\MasterProgram_from20250724\RS_GroundTruth\02_Salinas\salinas_class_colors.csv',
         # title = name
     # )
