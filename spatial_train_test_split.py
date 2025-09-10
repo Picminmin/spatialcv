@@ -739,7 +739,6 @@ def visualize_train_test_with_counts(
     print(f"[INFO] 棒グラフを保存しました: {bargraph_path}")
 
 
-
 def visualize_train_test_with_counts_csv(
     y,
     train_mask,
@@ -980,21 +979,6 @@ if __name__ == '__main__':
     y = pines.target.reshape([X.shape[0], X.shape[1]])
     y, train_mask, test_mask = show_rs_info(features=X, gt=y, name=name)
 
-    # visualize_train_test_blocks(
-        # y = y,
-        # train_mask = train_mask,
-        # test_mask = test_mask,
-        # background_label=0,
-        # title = name
-    # )
-    # visualize_train_test_with_counts(
-        # y = y,
-        # train_mask = train_mask,
-        # test_mask = test_mask,
-        # background_label=0,
-        # class_names = pines.target_names,
-        # title = name
-    # )
     # visualize_train_test_with_counts_csv(
         # y = y,
         # train_mask = train_mask,
@@ -1041,14 +1025,6 @@ if __name__ == '__main__':
     # name = name
     # )
 
-    # visualize_train_test_blocks(
-    # y = y,
-    # train_mask = train_mask,
-    # test_mask = test_mask,
-    # background_label=0,
-    # title = name
-    # )
-
     # visualize_train_test_with_counts_csv(
         # y = y,
         # train_mask = train_mask,
@@ -1071,13 +1047,6 @@ if __name__ == '__main__':
     # features = Salinas_features,
     # gt = Salinas_target,
     # name = name
-    # )
-    # visualize_train_test_blocks(
-    # y = y,
-    # train_mask = train_mask,
-    # test_mask = test_mask,
-    # background_label=0,
-    # title = name
     # )
 
     # visualize_train_test_with_counts_csv(
@@ -1102,14 +1071,6 @@ if __name__ == '__main__':
     gt = SalinasA_target,
     name = name
     )
-
-    # visualize_train_test_blocks(
-    # y = y,
-    # train_mask = train_mask,
-    # test_mask = test_mask,
-    # background_label=0,
-    # title = name
-    # )
 
     visualize_train_test_with_counts_csv(
         y = y,
