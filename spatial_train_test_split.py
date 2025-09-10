@@ -30,6 +30,8 @@ import matplotlib.pyplot as plt
 from sklearn.utils import resample
 from matplotlib.colors import ListedColormap, to_rgba
 
+__version__ = "0.0.1"
+
 def spatial_train_test_split(
     X,
     y,
