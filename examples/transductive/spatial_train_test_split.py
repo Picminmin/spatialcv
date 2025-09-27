@@ -311,7 +311,7 @@ if __name__ == '__main__':
     'pre-classified LULC data': 「ある時点、あるプロジェクトの基準に基づいて、各画素に土地被覆
     クラスを割り当てたデータ」
 
-    以上から、correctedは'pre-classified LULC data'に相当する可能性があると私は思う。
+    以上から、correctedは'pre-classified LULC data'に相当する可能性があると思う。
     """
     @dataclass
     class SpatialSplitConfig:
