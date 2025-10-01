@@ -8,7 +8,7 @@ unlabeledの個数の指定: trainの輪帯(近傍)から選ぶ。個数は倍�
 inductiveであることを主張するため、「Uからtest/valを必ず除外」する。
 
 実装案
-train: 各クラスの最小数を満たす連結ブロック領域(長方形ブロックの集合の連結成分)をどん欲な領域拡張
+train: 各クラスの最小数を満たす連結ブロック領域(長方形ブロックの集合の連結成分)を貪欲な領域拡張
 で確保。
 test: 残りブロックから同様に連結で各クラスの最小数を確保(目標test割合に近づける)。
 val (任意): testと同様にguard帯の外から確保。
@@ -30,8 +30,8 @@ class SpatialSplitConfigV2:
     n_cols: int = 13
     # 動的細分化
     dynamic_grid: bool = True
-    min_rows: int = 8
-    min_cols: int = 8
+    min_rows: int = 2
+    min_cols: int = 2
     max_rows: int = 26
     max_cols: int = 26
     # グリッド再試行
@@ -264,101 +264,119 @@ def spatial_train_test_split_v2(
 
     # ============= グリッドを変えながら試行 =============
     last_err = None
+
     for (nr, nc) in grids:
         try:
             block_id = _make_block_ids(H, W, nr, nc)
             n_blocks = block_id.max() + 1
-            counts = _class_counts_per_block(y, block_id, classes)
-
-            # 1) train
-            need_train = np.array([cfg.min_train_per_class]*len(classes), dtype=int)
-            target_train_pixels = int(target_train_ratio * total_labeled) if target_train_ratio > 0 else None
-            train_blocks = _grow_connected_blocks(counts, nr, nc, need_train, target_train_pixels,
-                                                  cfg.ratio_tol, rng, cfg.grow_max_steps)
-            if not train_blocks:
-                raise RuntimeError("train 連結選択に失敗")
-
-            train_mask = _mask_from_blocks(block_id, train_blocks) & (y != cfg.background_label)
-
-            # 2) test (train 以外)
-            remain_blocks = set(range(n_blocks)) - set(train_blocks)
-            if not remain_blocks:
-                raise RuntimeError("train が全域を占有し test 不可")
-
-            mask_remain = np.isin(block_id, list(remain_blocks))
-            y_remain = np.where(mask_remain, y, cfg.background_label)
-            counts_remain = _class_counts_per_block(y_remain, block_id, classes)
-
-            need_test = np.array([cfg.min_test_per_class]*len(classes), dtype = int)
-            target_test_pixels = int(test_size * total_labeled)
-            test_blocks = _grow_connected_blocks(counts_remain, nr, nc, need_test, target_test_pixels,
-                                                 cfg.ratio_tol, rng, cfg.grow_max_steps)
-            if not test_blocks:
-                raise RuntimeError("test 連結選択に失敗")
-            test_blocks -= set(train_blocks)
-            test_mask = _mask_from_blocks(block_id, test_blocks) & (y != cfg.background_label)
-
-            actual_train_ratio = train_mask.sum() / max(1, total_labeled)
-            actual_test_ratio = test_mask.sum() / max(1, total_labeled)
-
-            # 3) val (任意)
-            val_mask = None
-            if val_size and val_size > 0.0 and cfg.min_val_per_class > 0:
-                guard = binary_dilation(train_mask, iterations=cfg.buffer_px) | \
-                        binary_dilation(test_mask, iterations=cfg.buffer_px)
-                cand = (~guard) & (y != cfg.background_label)
-                y_cand = np.where(cand, y, cfg.background_label)
-                counts_cand = _class_counts_per_block(y_cand, block_id, classes)
-                need_val = np.array([cfg.min_val_per_class]*len(classes), dtype = int)
-                target_val_pixels = int(val_size * total_labeled)
-                val_blocks = _grow_connected_blocks(counts_cand, nr, nc, need_val, target_val_pixels,
-                                                    cfg.ratio_tol, rng, cfg.grow_max_steps)
-                if val_blocks:
-                    val_blocks -= (set(train_blocks) | set(test_blocks))
-                    val_mask = _mask_from_blocks(block_id, val_blocks) & cand
-
-            # 4) unlabeled
-            background_mask = (y == cfg.background_label)
-            if cfg.unlabeled_multiplier is not None:
-                target_u = int(np.ceil(cfg.unlabeled_multiplier * train_mask.sum()))
-            else:
-                target_u = None
-            if cfg.unlabeled_count is not None:
-                target_u = cfg.unlabeled_count if target_u is None else min(target_u, cfg.unlabeled_count)
-            if target_u in None:
-                target_u = int(np.ceil(1.0 * train_mask.sum()))
-
-
-            U_index = _mask_unlabeled_indices(
-                L_mask = train_mask,
-                background_mask = background_mask,
-                test_mask = test_mask,
-                val_mask = val_mask,
-                u_ring = cfg.u_ring,
-                max_ring = cfg.max_ring,
-                target_count = target_u
-            )
-
-            # ========== 5) 出力 ==========
-            X_flat = X.reshape(-1 ,X.shape[2]); y_flat = y.ravel()
-            train_idx = np.flatnonzero(train_mask); test_idx = np.flatnonzero(test_mask)
-
-            X_train, y_train = X_flat[train_idx], y_flat[train_idx]
-            X_test, y_test = X_flat[test_idx], y_flat[test_idx]
-
-            return (X_train, X_test, y_train, y_test,
-                    train_mask, test_mask, val_mask,
-                    U_index, actual_train_ratio, actual_test_ratio)
-
+            return _split_once(X, y, block_id, classes,
+                               target_train_ratio, test_size, val_size,
+                               cfg, rng)
         except Exception as e:
             last_err = e
             # 次のグリッド候補で再試行
             continue
 
+    # フォールバック: train_ratio ベースのグリッド
+    try:
+        dyn_rows = max(cfg.min_rows, int(H * target_train_ratio))
+        dyn_cols = max(cfg.min_cols, int(W * target_train_ratio))
+        print(f"[INFO] fallback with train_ratio-based grid: {dyn_rows} * {dyn_cols}")
+        block_id = _make_block_ids(H, W, dyn_rows, dyn_cols)
+        return _split_once(X, y, block_id, classes,
+                           target_train_ratio, test_size, val_size,
+                           cfg, rng)
+    except Exception as e:
+        last_err = e
+
     # すべて失敗
     raise RuntimeError(f"グリッド再試行に失敗しました。最後のエラー: {last_err}")
 
+def _split_once(X, y, block_id, classes,
+                target_train_ratio, test_size, val_size,
+                cfg: SpatialSplitConfigV2, rng):
+    H, W = y.shape
+    n_blocks = block_id.max() + 1
+    counts = _class_counts_per_block(y, block_id, classes)
 
+    # --- train ---
+    need_train = np.array([cfg.min_train_per_class]*len(classes), dtype=int)
+    total_labeled = int(np.sum(y != cfg.background_label))
+    target_train_pixels = int(target_train_ratio * total_labeled) if target_train_ratio > 0 else None
+    train_blocks = _grow_connected_blocks(counts, block_id.max()+1, block_id.shape[1],
+                                          need_train, target_train_pixels,
+                                          cfg.ratio_tol, rng, cfg.grow_max_steps)
+    if not train_blocks:
+        raise RuntimeError("train 連結選択に失敗")
+    train_mask = _mask_from_blocks(block_id, train_blocks) & (y != cfg.background_label)
+    # --- test ---
+    remain_blocks = set(range(n_blocks)) - set(train_blocks)
+    if not remain_blocks:
+        raise RuntimeError("train が全域を占有し test 不可")
+    mask_remain = np.isin(block_id, list(remain_blocks))
+    y_remain = np.where(mask_remain, y, cfg.background_label)
+    counts_remain = _class_counts_per_block(y_remain, block_id, classes)
+
+    need_test = np.array([cfg.min_test_per_class]*len(classes),dtype=int)
+    target_test_pixels = int(test_size * total_labeled)
+    test_blocks = _grow_connected_blocks(counts_remain, block_id.shape[0], block_id.shape[1],
+                                         need_test, target_test_pixels,
+                                         cfg.ratio_tol, rng, cfg.grow_max_steps)
+    if not test_blocks:
+        raise RuntimeError("test 連結選択に失敗")
+    test_blocks -= set(train_blocks)
+    test_mask = _mask_from_blocks(block_id, test_blocks) & (y != cfg.background_label)
+
+    actual_train_ratio = train_mask.sum() / max(1, total_labeled)
+    actual_test_ratio = test_mask.sum() / max(1, total_labeled)
+
+    # --- val (optional) ---
+    val_mask = None
+    if val_size > 0.0 and cfg.min_val_per_class > 0:
+        guard = binary_dilation(train_mask, iterations=cfg.buffer_px) | \
+                binary_dilation(test_mask, iterations=cfg.buffer_px)
+        cand = (~guard) & (y != cfg.background_label)
+        y_cand = np.where(cand, y, cfg.background_label)
+        counts_cand = _class_counts_per_block(y_cand, block_id, classes)
+        need_val = np.array([cfg.min_val_per_class]*len(classes), dtype=int)
+        target_val_pixels = int(val_size * total_labeled)
+        val_blocks = _grow_connected_blocks(counts_cand, block_id.shape[0], block_id.shape[1],
+                                            need_val, target_val_pixels,
+                                            cfg.ratio_tol, rng, cfg.grow_max_steps)
+        if val_blocks:
+            val_blocks -= (set(train_blocks) | set(test_blocks))
+            val_mask = _mask_from_blocks(block_id, val_blocks) & cand
+
+    # --- unlabeled ---
+    background_mask = (y == cfg.background_label)
+    if cfg.unlabeled_multiplier is not None:
+        target_u = int(np.ceil(cfg.unlabeled_multiplier * train_mask.sum()))
+    else:
+        target_u = None
+    if cfg.unlabeled_count is not None:
+        target_u = cfg.unlabeled_count if target_u is None else min(target_u, cfg.unlabeled_count)
+    if target_u is None:
+        target_u = int(np.ceil(1.0 * train_mask.sum()))
+
+    U_index = _mask_unlabeled_indices(
+        L_mask=train_mask,
+        background_mask=background_mask,
+        test_mask=test_mask,
+        val_mask=val_mask,
+        u_ring=cfg.u_ring,
+        max_ring=cfg.max_ring,
+        target_count=target_u
+    )
+
+    # --- 出力 ---
+    X_flat = X.reshape(-1, X.shape[2]); y_flat = y.ravel()
+    train_idx = np.flatnonzero(train_mask); test_idx = np.flatnonzero(test_mask)
+    X_train, y_train = X_flat[train_idx], y_flat[train_idx]
+    X_test, y_test = X_flat[test_idx], y_flat[test_idx]
+
+    return (X_train, X_test, y_train, y_test,
+            train_mask, test_mask, val_mask,
+            U_index, actual_train_ratio, actual_test_ratio)
 
 
 if __name__ == "__main__":
@@ -369,7 +387,7 @@ if __name__ == "__main__":
     X, y = ds.load("Indianpines")
     H, W, B = X.shape
     # シード値
-    random_state = 43
+    random_state = 40
     class SpatialSplitConfigV2:
         # ブロック分割(基準)
         n_rows=13
@@ -377,17 +395,17 @@ if __name__ == "__main__":
         # 動的細分化
         dynamic_grid: bool = True
         grid_retry=True
-        grid_attempts=30
+        grid_attempts=50
         grid_decrement_step=2
 
         try_gcd_start=False,   # 試したいときはTrue
-        grow_max_steps = 2000  # 連結拡張の上限。重いときは 2000 など指定
-        min_rows: int = 8
-        min_cols: int = 8
-        max_rows: int = 26
-        max_cols: int = 26
+        grow_max_steps = 20000  # 連結拡張の上限。重いときは 2000 など指定
+        min_rows: int = 2
+        min_cols: int = 2
+        max_rows: int = H // 15
+        max_cols: int = W // 15
         # クラス別最小数
-        min_train_per_class: int = 10
+        min_train_per_class: int = 1
         min_test_per_class: int = 5
         min_val_per_class: int = 0 # 0 なら val なしでも可
         # 背景・乱数
@@ -395,18 +413,18 @@ if __name__ == "__main__":
         random_state: Optional[int] = random_state
         # 近傍輪帯&評価ガード
         u_ring: int = 2     # train をこのピクセルだけ膨張 → 輪帯
-        max_ring: int = 10
-        buffer_px: int = 6  # guard 帯の厚み(val/test は train∪U からこれだけ離す)
+        max_ring: int = 20
+        buffer_px: int = 1  # guard 帯の厚み(val/test は train∪U からこれだけ離す)
         # unlabeled の量 (倍率優先、していなければNone)
         unlabeled_multiplier: Optional[float] = 1.0 # |U|=ceil(r*|L|)。Noneならu_cntを使う
         unlabeled_count: Optional[int] = None
         # 反復上限
         max_iter: int = 500
         # 目標比率への許容誤差
-        ratio_tol: float = 0.02 # ±2%
+        ratio_tol: float = 0.20 # ±10%
 
     cfg = SpatialSplitConfigV2()
     X_train, X_test, y_train, y_test, train_mask, test_mask, val_mask, U_index, tr_r, te_r = \
-        spatial_train_test_split_v2(X, y, test_size = 0.4, val_size = 0.1, cfg=cfg)
+        spatial_train_test_split_v2(X, y, test_size = 0.4, val_size = 0.3, cfg=cfg)
 
     print(f"|L|={train_mask.sum()}, |U|={len(U_index)}, |T|={test_mask.sum()}  train={tr_r:.3f}, test={te_r:.3f}")
