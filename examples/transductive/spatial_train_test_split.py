@@ -36,17 +36,17 @@ __version__ = "0.0.5"
 
 @dataclass
 class SpatialSplitConfig:
-    n_rows: int = 13                       # ブロック分割数(縦)
-    n_cols: int = 13                       # ブロック分割数(横)
-    min_train_samples_per_class: int = 20  # 各土地被覆クラスで作成する教師データのサンプル数の下限
-    min_test_samples_per_class: int = 5    # 各土地被覆クラスで作成するなテストサンプル数の下限
-    background_label: int = 0              # 各土地被覆クラスで作成するなテストサンプル数の下限
-    random_state: int = None               # 乱数シード
-    auto_adjust_test_size: bool = False    # テストサイズを自動調整するか
-    min_search_test_ratio: float = None    # 自動探索モード時の下限
-    max_search_test_ratio: float = None    # 自動探索モード時の上限
-    step: float = 0.05                     # 自動探索モード時の刻み幅
-    max_iter: int = 100                    # ランダム試行回数
+    n_rows = 13                       # ブロック分割数(縦)
+    n_cols = 13                       # ブロック分割数(横)
+    min_train_samples_per_class = 20  # 各土地被覆クラスで作成する教師データのサンプル数の下限
+    min_test_samples_per_class = 5    # 各土地被覆クラスで作成するなテストサンプル数の下限
+    background_label = 0              # 各土地被覆クラスで作成するなテストサンプル数の下限
+    random_state = None               # 乱数シード
+    auto_adjust_test_size = False     # テストサイズを自動調整するか
+    min_search_test_ratio = None      # 自動探索モード時の下限
+    max_search_test_ratio = None      # 自動探索モード時の上限
+    step = 0.05                       # 自動探索モード時の刻み幅
+    max_iter = 100                    # ランダム試行回数
 
 def spatial_train_test_split(X, y, test_size = 0.7, cfg: SpatialSplitConfig = SpatialSplitConfig()):
     """
@@ -129,7 +129,7 @@ def spatial_train_test_split(X, y, test_size = 0.7, cfg: SpatialSplitConfig = Sp
     # =========================================
 
     if not cfg.auto_adjust_test_size:
-        for _ in range(cfg.max_iter):
+        for curr in range(cfg.max_iter):
             result = try_split(test_size)
             if result is not None:
                 best_test_size = len(result[1]) / total_pixels
